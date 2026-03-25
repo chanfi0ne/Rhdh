@@ -26,7 +26,7 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: chanfi0ne/rhdh
-  TRIVY_VERSION: "0.59.1"
+  TRIVY_VERSION: "0.59.0"
 
 jobs:
   build-scan-push:
@@ -81,8 +81,12 @@ jobs:
           docker build -f /tmp/Dockerfile.scan -t rhdh-runner-scan:local .
 
       - name: Install Trivy
+        env:
+          TRIVY_DEB_URL: "https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.deb"
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}"
+          curl -fsSL -o /tmp/trivy.deb "$TRIVY_DEB_URL"
+          sudo dpkg -i /tmp/trivy.deb
+          rm /tmp/trivy.deb
           trivy --version
 
       - name: Run Trivy vulnerability scanner (table)
