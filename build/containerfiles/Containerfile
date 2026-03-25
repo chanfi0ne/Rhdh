@@ -254,13 +254,15 @@ RUN microdnf install -y python3.11 python3.11-pip python3.11-devel make cmake cp
   pip install --no-cache-dir -r requirements.txt -r requirements-build.txt; mkdocs --version; \
   popd >/dev/null; \
   rm -fr python/; \
-  # Remove build-time dependencies that are not needed at runtime to reduce CVE surface
-  set +e; \
-  microdnf remove -y --setopt=clean_requirements_on_remove=1 \
-    python3.11-devel make cmake cpp gcc gcc-c++ \
-    kernel-headers binutils binutils-gold glibc-devel \
-    libstdc++-devel cmake-data cmake-filesystem 2>/dev/null; \
-  set -e; \
+  # Remove build-time dependencies not needed at runtime to reduce CVE surface.
+  # Use rpm -e instead of microdnf remove because the hermetic build replaces
+  # yum repos with cachi2 and disables networking, causing microdnf to fail
+  # silently when it cannot refresh repo metadata during package removal.
+  rpm -e --nodeps --allmatches \
+    python3.11-devel make cmake cmake-data cmake-filesystem \
+    cpp gcc gcc-c++ kernel-headers binutils binutils-gold \
+    glibc-devel libstdc++-devel libxcrypt-devel libmpc \
+    zlib-devel openssl-devel brotli-devel 2>/dev/null || true; \
   microdnf clean all
 
 # RHDHBUGS-2799: custom policy.json file with a specific identity mapping for pulls against registry.access.redhat.com/rhdh
