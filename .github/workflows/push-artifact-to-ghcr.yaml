@@ -1,0 +1,84 @@
+name: Push Artifact to GHCR
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Run ID of the build workflow that produced the image artifact'
+        required: true
+      pr_number:
+        description: 'PR number for tagging'
+        required: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: chanfi0ne/rhdh
+
+jobs:
+  push-image:
+    name: Push Image to GHCR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Determine artifact name
+        id: artifact
+        env:
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          RUN_ID: ${{ github.event.inputs.run_id }}
+        run: |
+          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          # List artifacts from that run to find the podman-image one
+          echo "Looking for artifacts from run $RUN_ID for PR $PR_NUMBER"
+
+      - name: Download image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: podman-image-*
+          path: ./rhdh-podman-artifacts
+          run-id: ${{ github.event.inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          merge-multiple: true
+
+      - name: Load image
+        id: load
+        run: |
+          ls -la ./rhdh-podman-artifacts/
+          if [ ! -f "./rhdh-podman-artifacts/image.tar" ]; then
+            echo "Error: image.tar not found"
+            exit 1
+          fi
+          podman load -i ./rhdh-podman-artifacts/image.tar
+          echo "Loaded images:"
+          podman images
+          cat ./rhdh-podman-artifacts/tags.txt
+
+      - name: Log in to GHCR
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retag and push to GHCR
+        env:
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+        run: |
+          # Read the tags from metadata
+          TAGS=$(cat ./rhdh-podman-artifacts/tags.txt)
+          echo "Original tags:"
+          echo "$TAGS"
+
+          # The image was built with quay.io tags, retag for GHCR
+          for TAG in $TAGS; do
+            # Replace any registry prefix with ghcr.io/chanfi0ne/rhdh
+            NEW_TAG=$(echo "$TAG" | sed "s|^[^/]*/[^:]*|ghcr.io/chanfi0ne/rhdh|")
+            if [ "$TAG" != "$NEW_TAG" ]; then
+              echo "Retagging: $TAG -> $NEW_TAG"
+              podman tag "$TAG" "$NEW_TAG" || true
+              TAG="$NEW_TAG"
+            fi
+            echo "Pushing: $TAG"
+            podman push "$TAG"
+          done

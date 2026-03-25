@@ -1,0 +1,166 @@
+# Scan the runner stage base image for vulnerabilities
+# This builds a minimal image replicating the runner stage's system-level
+# package installations, scans it with Trivy, and pushes to GHCR.
+#
+# NOTE: We install Trivy directly rather than using aquasecurity/trivy-action
+# due to the March 2026 supply chain compromise of that action's tags.
+
+name: Scan Runner Image
+
+on:
+  pull_request:
+    paths:
+      - 'build/containerfiles/Containerfile'
+      - '.github/workflows/scan-runner-image.yaml'
+  push:
+    branches: [main]
+    paths:
+      - 'build/containerfiles/Containerfile'
+      - '.github/workflows/scan-runner-image.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: chanfi0ne/rhdh
+  TRIVY_VERSION: "0.69.3"
+
+jobs:
+  build-scan-push:
+    name: Build, Scan & Push Runner Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Extract runner stage for scanning
+        run: |
+          # Build a minimal Dockerfile that replicates the runner stage's
+          # system-level package installs so we can scan for OS-level CVEs.
+          cat > /tmp/Dockerfile.scan <<'DOCKERFILE'
+          FROM registry.access.redhat.com/ubi9/nodejs-22-minimal:latest
+          USER 0
+
+          # Copy python requirements so pip install works
+          COPY python/ /tmp/python/
+
+          # Replicate the runner stage package installation from Containerfile
+          RUN microdnf install -y python3.11 python3.11-pip python3.11-devel make cmake cpp gcc gcc-c++ skopeo 1>/dev/null 2>&1; \
+            alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
+            alternatives --install /usr/bin/pip pip /usr/bin/pip3.11 1 && \
+            mkdir -p /opt/app-root/src/.cache/pip && chown -R root:root /opt/app-root && \
+            pushd /tmp/python/ >/dev/null && \
+            set -e; \
+            pip install --no-cache-dir --upgrade pip setuptools pyyaml; \
+            pip install --no-cache-dir -r requirements.txt -r requirements-build.txt; mkdocs --version; \
+            popd >/dev/null; \
+            rm -fr /tmp/python/; \
+            # Remove build-time dependencies not needed at runtime to reduce CVE surface
+            set +e; \
+            microdnf remove -y python3.11-devel make cmake cpp gcc gcc-c++ 2>/dev/null; \
+            set -e; \
+            microdnf clean all
+
+          USER 1001
+          DOCKERFILE
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3
+
+      - name: Build scanner image
+        run: |
+          docker build -f /tmp/Dockerfile.scan -t rhdh-runner-scan:local .
+
+      - name: Install Trivy
+        env:
+          TRIVY_DEB_URL: "https://github.com/aquasecurity/trivy/releases/download/v${{ env.TRIVY_VERSION }}/trivy_${{ env.TRIVY_VERSION }}_Linux-64bit.deb"
+        run: |
+          curl -fsSL -o /tmp/trivy.deb "$TRIVY_DEB_URL"
+          sudo dpkg -i /tmp/trivy.deb
+          rm /tmp/trivy.deb
+          trivy --version
+
+      - name: Run Trivy vulnerability scanner (table)
+        run: |
+          trivy image \
+            --severity CRITICAL,HIGH \
+            --format table \
+            --output trivy-results.txt \
+            rhdh-runner-scan:local
+
+      - name: Display scan results
+        if: always()
+        run: |
+          echo "=== Trivy Scan Results ==="
+          cat trivy-results.txt
+          echo ""
+          echo "=== Summary ==="
+          CRITICAL=$(grep -c "CRITICAL" trivy-results.txt || true)
+          HIGH=$(grep -c "HIGH" trivy-results.txt || true)
+          echo "Critical: $CRITICAL"
+          echo "High: $HIGH"
+
+      - name: Upload Trivy scan results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trivy-scan-results
+          path: trivy-results.txt
+          retention-days: 30
+
+      - name: Run Trivy (SARIF for Security tab)
+        run: |
+          trivy image \
+            --severity CRITICAL,HIGH \
+            --format sarif \
+            --output trivy-results.sarif \
+            rhdh-runner-scan:local
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      # Push to GHCR on main branch pushes and workflow_dispatch
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image metadata
+        if: github.event_name != 'pull_request'
+        id: meta
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "timestamp=$(date -u +%Y%m%d%H%M%S)" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and push to GHCR
+        if: github.event_name != 'pull_request'
+        env:
+          SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
+          TIMESTAMP: ${{ steps.meta.outputs.timestamp }}
+        run: |
+          docker tag rhdh-runner-scan:local "$REGISTRY/$IMAGE_NAME:latest"
+          docker tag rhdh-runner-scan:local "$REGISTRY/$IMAGE_NAME:$SHORT_SHA"
+          docker tag rhdh-runner-scan:local "$REGISTRY/$IMAGE_NAME:$TIMESTAMP"
+          docker push "$REGISTRY/$IMAGE_NAME:latest"
+          docker push "$REGISTRY/$IMAGE_NAME:$SHORT_SHA"
+          docker push "$REGISTRY/$IMAGE_NAME:$TIMESTAMP"
+          echo "### Pushed to GHCR" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`$REGISTRY/$IMAGE_NAME:latest\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`$REGISTRY/$IMAGE_NAME:$SHORT_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`$REGISTRY/$IMAGE_NAME:$TIMESTAMP\`" >> "$GITHUB_STEP_SUMMARY"

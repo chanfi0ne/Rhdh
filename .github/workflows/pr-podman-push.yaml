@@ -14,6 +14,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_run' }}
     permissions:
       contents: read
+      packages: write
       issues: write
       pull-requests: write
     
@@ -171,6 +172,14 @@ jobs:
           printf '%s\n' "$TAGS_LIST" >> $GITHUB_OUTPUT
           echo "$DELIMITER" >> $GITHUB_OUTPUT
 
+      - name: Log in to GHCR
+        if: ${{ github.event.workflow_run.conclusion == 'success' && steps.check-skip.outputs.is_skipped != 'true' }}
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Push Images
         if: ${{ github.event.workflow_run.conclusion == 'success' && steps.check-skip.outputs.is_skipped != 'true' }}
         uses: redhat-actions/push-to-registry@5ed88d269cf581ea9ef6dd6806d01562096bee9c # v2.8
@@ -178,8 +187,8 @@ jobs:
           PUSHED_TAGS: ${{ steps.prepare.outputs.tags }}
         with:
           tags: ${{ env.PUSHED_TAGS }}
-          username: ${{ secrets.QUAY_USERNAME }}
-          password: ${{ secrets.QUAY_TOKEN }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Comment skip status
         if: ${{ github.event.workflow_run.conclusion == 'success' && steps.check-skip.outputs.is_skipped == 'true' }}
