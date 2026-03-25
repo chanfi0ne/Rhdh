@@ -255,7 +255,9 @@ RUN microdnf install -y python3.11 python3.11-pip python3.11-devel make cmake cp
   popd >/dev/null; \
   rm -fr python/; \
   # Remove build-time dependencies that are not needed at runtime to reduce CVE surface
-  microdnf remove -y python3.11-devel make cmake cpp gcc gcc-c++ 1>/dev/null 2>&1; \
+  set +e; \
+  microdnf remove -y python3.11-devel make cmake cpp gcc gcc-c++ 2>/dev/null; \
+  set -e; \
   microdnf clean all
 
 # RHDHBUGS-2799: custom policy.json file with a specific identity mapping for pulls against registry.access.redhat.com/rhdh

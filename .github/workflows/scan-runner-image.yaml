@@ -65,7 +65,9 @@ jobs:
             popd >/dev/null; \
             rm -fr /tmp/python/; \
             # Remove build-time dependencies not needed at runtime to reduce CVE surface
-            microdnf remove -y python3.11-devel make cmake cpp gcc gcc-c++ 1>/dev/null 2>&1; \
+            set +e; \
+            microdnf remove -y python3.11-devel make cmake cpp gcc gcc-c++ 2>/dev/null; \
+            set -e; \
             microdnf clean all
 
           USER 1001
