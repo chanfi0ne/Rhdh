@@ -255,14 +255,35 @@ RUN microdnf install -y python3.11 python3.11-pip python3.11-devel make cmake cp
   popd >/dev/null; \
   rm -fr python/; \
   # Remove build-time dependencies not needed at runtime to reduce CVE surface.
-  # Use rpm -e instead of microdnf remove because the hermetic build replaces
-  # yum repos with cachi2 and disables networking, causing microdnf to fail
-  # silently when it cannot refresh repo metadata during package removal.
-  rpm -e --nodeps --allmatches \
-    python3.11-devel make cmake cmake-data cmake-filesystem \
-    cpp gcc gcc-c++ kernel-headers binutils binutils-gold \
-    glibc-devel libstdc++-devel libxcrypt-devel libmpc \
-    zlib-devel openssl-devel brotli-devel 2>/dev/null || true; \
+  # Use rpm -e individually per package because rpm -e is transactional: if ANY
+  # package in a list is not found, the ENTIRE operation fails and nothing is
+  # removed. The || true hid this silent failure in previous attempts.
+  for pkg in \
+    python3.11-devel \
+    make \
+    cmake \
+    cmake-data \
+    cmake-filesystem \
+    cmake-rpm-macros \
+    cpp \
+    gcc \
+    gcc-c++ \
+    kernel-headers \
+    binutils \
+    binutils-gold \
+    glibc-devel \
+    glibc-headers \
+    libstdc++-devel \
+    libxcrypt-devel \
+    libmpc \
+    zlib-devel \
+    openssl-devel \
+    brotli-devel \
+    annobin \
+    gcc-plugin-annobin \
+    redhat-rpm-config \
+    vim-filesystem \
+  ; do rpm -e --nodeps --allmatches "$pkg" 2>/dev/null || true; done; \
   microdnf clean all
 
 # RHDHBUGS-2799: custom policy.json file with a specific identity mapping for pulls against registry.access.redhat.com/rhdh
