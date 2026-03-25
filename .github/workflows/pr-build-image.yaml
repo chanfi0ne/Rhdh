@@ -22,8 +22,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  REGISTRY: quay.io
-  IMAGE_NAME: rhdh-community/rhdh
+  REGISTRY: ghcr.io
+  IMAGE_NAME: chanfi0ne/rhdh
 
 jobs:
   build-image:
@@ -31,6 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
