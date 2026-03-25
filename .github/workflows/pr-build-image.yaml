@@ -91,3 +91,22 @@ jobs:
             pr-${{ github.event.number }}-${{ env.SHORT_SHA }}
           imageLabels: quay.expires-after=14d
           platform: linux/amd64
+
+      - name: Log in to GHCR
+        if: ${{ steps.check-image.outputs.is_skipped != 'true' }}
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image to GHCR
+        if: ${{ steps.check-image.outputs.is_skipped != 'true' }}
+        env:
+          IMAGE_TAG_PR: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:pr-${{ github.event.number }}
+          IMAGE_TAG_SHA: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:pr-${{ github.event.number }}-${{ env.SHORT_SHA }}
+        run: |
+          echo "Pushing $IMAGE_TAG_PR"
+          podman push "$IMAGE_TAG_PR"
+          echo "Pushing $IMAGE_TAG_SHA"
+          podman push "$IMAGE_TAG_SHA"
