@@ -256,7 +256,10 @@ RUN microdnf install -y python3.11 python3.11-pip python3.11-devel make cmake cp
   rm -fr python/; \
   # Remove build-time dependencies that are not needed at runtime to reduce CVE surface
   set +e; \
-  microdnf remove -y python3.11-devel make cmake cpp gcc gcc-c++ 2>/dev/null; \
+  microdnf remove -y --setopt=clean_requirements_on_remove=1 \
+    python3.11-devel make cmake cpp gcc gcc-c++ \
+    kernel-headers binutils binutils-gold glibc-devel \
+    libstdc++-devel cmake-data cmake-filesystem 2>/dev/null; \
   set -e; \
   microdnf clean all
 
