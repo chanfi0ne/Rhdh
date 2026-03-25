@@ -1,0 +1,103 @@
+# Scan the runner stage base image for vulnerabilities
+# This builds a minimal image replicating the runner stage's system-level
+# package installations and scans it with Trivy to validate CVE reduction.
+
+name: Scan Runner Image
+
+on:
+  pull_request:
+    paths:
+      - 'build/containerfiles/Containerfile'
+      - '.github/workflows/scan-runner-image.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan-runner:
+    name: Build & Scan Runner Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Extract runner stage for scanning
+        run: |
+          # Build a minimal Dockerfile that replicates the runner stage's
+          # system-level package installs so we can scan for OS-level CVEs.
+          cat > /tmp/Dockerfile.scan <<'DOCKERFILE'
+          FROM registry.access.redhat.com/ubi9/nodejs-22-minimal:latest
+          USER 0
+
+          # Copy python requirements so pip install works
+          COPY python/ /tmp/python/
+
+          # Replicate the runner stage package installation from Containerfile
+          RUN microdnf install -y python3.11 python3.11-pip python3.11-devel make cmake cpp gcc gcc-c++ skopeo 1>/dev/null 2>&1; \
+            alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
+            alternatives --install /usr/bin/pip pip /usr/bin/pip3.11 1 && \
+            mkdir -p /opt/app-root/src/.cache/pip && chown -R root:root /opt/app-root && \
+            pushd /tmp/python/ >/dev/null && \
+            set -e; \
+            pip install --no-cache-dir --upgrade pip setuptools pyyaml; \
+            pip install --no-cache-dir -r requirements.txt -r requirements-build.txt; mkdocs --version; \
+            popd >/dev/null; \
+            rm -fr /tmp/python/; \
+            # Remove build-time dependencies not needed at runtime to reduce CVE surface
+            microdnf remove -y python3.11-devel make cmake cpp gcc gcc-c++ 1>/dev/null 2>&1; \
+            microdnf clean all
+
+          USER 1001
+          DOCKERFILE
+
+      - name: Build scanner image
+        run: |
+          docker build -f /tmp/Dockerfile.scan -t rhdh-runner-scan:pr .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: 'rhdh-runner-scan:pr'
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
+          output: 'trivy-results.txt'
+
+      - name: Display scan results
+        if: always()
+        run: |
+          echo "=== Trivy Scan Results ==="
+          cat trivy-results.txt
+          echo ""
+          echo "=== Summary ==="
+          CRITICAL=$(grep -c "CRITICAL" trivy-results.txt || true)
+          HIGH=$(grep -c "HIGH" trivy-results.txt || true)
+          echo "Critical: $CRITICAL"
+          echo "High: $HIGH"
+
+      - name: Upload Trivy scan results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trivy-scan-results
+          path: trivy-results.txt
+          retention-days: 30
+
+      - name: Run Trivy (SARIF for Security tab)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: 'rhdh-runner-scan:pr'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
